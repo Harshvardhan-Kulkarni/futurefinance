@@ -12,54 +12,81 @@ import streamlit.components.v1 as components
 import nltk
 from nltk.tokenize import word_tokenize
 import requests
+import time
     
 st.title("Stock Market Analysis")
-today = datetime.date.today()
+today = datetime.date.today().strftime('%Y-%m-%d')
 start = '2010-01-01'
-end = today.strftime('%Y-%m-%d')
+end = today
 st.sidebar.title("Predictive Analysis of Stock Market Trends:           ")
-user_input = st.sidebar.text_input("Enter Stock Ticker (e.g., AAPL)", "AAPL",key="stock_symbol")
+user_input = st.sidebar.text_input("Enter Stock Ticker (e.g., GOOGL)", "GOOGL",key="stock_symbol")
 
-df = yf.download(user_input, start=start, end=end)
+def download_stock_data(symbol, max_retries=3, delay=1):
+    for attempt in range(max_retries):
+        try:
+            df = yf.download(symbol, start=start, end=end, progress=False)
+            if not df.empty:
+                return df
+            time.sleep(delay)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep(delay)
+    return None
 
-model=load_model("keras model.h5")
-
-
+try:
+    with st.spinner('Downloading stock data...'):
+        df = download_stock_data(user_input)
+    
+    if df is None or df.empty:
+        st.error(f"No data found for {user_input}. Please check the stock symbol and try again.")
+        st.stop()
+        
+    if len(df) < 100:
+        st.error(f"Insufficient data for {user_input}. Need at least 100 days of data.")
+        st.stop()
+        
+    model = load_model("keras model.h5")
+    
     #Splitting Data into Training and Testing using MinMaxScaler
+    data_training = pd.DataFrame(df['Close'][0: int(len(df)*0.70)])
+    data_testing = pd.DataFrame(df['Close'][int(len(df)*0.70): int(len(df))])
+    
+    from sklearn.preprocessing import MinMaxScaler
+    scaler = MinMaxScaler(feature_range=(0,1))
+    data_training_array = scaler.fit_transform(data_training)
+    data_testing_array = scaler.fit_transform(data_testing)
+    
+    past_100_days = data_training.tail(100)
+    final_df = past_100_days._append(data_testing, ignore_index=True)
+    input_data=scaler.fit_transform(final_df)
 
-data_training = pd.DataFrame(df['Close'][0: int(len(df)*0.70)])
-data_testing= pd.DataFrame(df['Close'][int(len(df)*0.70): int(len(df))])
-from sklearn.preprocessing import MinMaxScaler
-scaler = MinMaxScaler(feature_range=(0,1))
-data_training_array= scaler.fit_transform(data_training)
-data_testing_array= scaler.fit_transform(data_testing)
+    x_test = []
+    y_test = []
+
+    for i in range(100, input_data.shape[0]):
+        x_test.append(input_data[i-100: i])
+        y_test.append(input_data[i, 0])
+
+    x_test , y_test =np.array(x_test) , np.array(y_test);
+
+    #predication making
+    test_predication = model.predict(x_test)
+    scaler.scale_
+
+    scaling_factor = 1/scaler.scale_[0]
+    y_test = y_test*scaling_factor
+    test_predication=test_predication*scaling_factor
+
+except Exception as e:
+    st.error(f"Error downloading data for {user_input}: {str(e)}")
+    st.error("Please try again in a few moments. If the problem persists, try a different stock symbol.")
+    st.stop()
 
 def fetch_stock_data(symbol):
     # Fetch data from Yahoo Finance
     stock_data = yf.Ticker(symbol)
     return stock_data
-
-past_100_days = data_training.tail(100)
-final_df = past_100_days._append(data_testing, ignore_index=True)
-
-input_data=scaler.fit_transform(final_df)
-
-x_test = []
-y_test = []
-
-for i in range(100, input_data.shape[0]):
-        x_test.append(input_data[i-100: i])
-        y_test.append(input_data[i, 0])
-
-x_test , y_test =np.array(x_test) , np.array(y_test);
-
-    #predication making
-test_predication = model.predict(x_test)
-scaler.scale_
-
-scaling_factor = 1/scaler.scale_[0]
-y_test = y_test*scaling_factor
-test_predication=test_predication*scaling_factor
 
 # Sidebar navigation
 page = st.sidebar.selectbox("Select a page", ["Home", "Stock Analysis", "Prediction","Chatbot","Stock News"])
@@ -83,7 +110,7 @@ if page == "Home":
     cols = st.columns(2)
     with cols[0]:
         st.markdown("- [Ashish Ruke](https://www.linkedin.com/in/ashish-ruke-68a038230/)")
-        st.markdown("- [Harshvardhan Kulkarni](https://www.linkedin.com/in/ashish-ruke-68a038230/)")
+        st.markdown("- [Harshvardhan Kulkarni](https://www.linkedin.com/in/harshvardhan-kulkarni-a952822ba/)")
     with cols[1]:
         st.markdown("- [Anushka Pote](https://www.linkedin.com/in/anushka-pote-17b692224/)")
         st.markdown("- [Shreyash Shegade](https://www.linkedin.com/in/shreyash-shedage-970b812a7/)")
@@ -382,9 +409,9 @@ elif page == "Prediction":
     if st.session_state.stock_symbol is not None:
         try:
             # Download historical data
-            stock_data = yf.download(user_input, start="2023-01-01", end="2028-01-01")
+            stock_data = yf.download(user_input, start="2020-01-01", end=today)
 
-            if not stock_data.empty and len(stock_data['Adj Close']) >= 2:
+            if not stock_data.empty and 'Adj Close' in stock_data.columns and len(stock_data['Adj Close']) >= 2:
                 # Calculate returns over the next 5 years
                 returns_next_5_years = (stock_data['Adj Close'].iloc[-1] / stock_data['Adj Close'].iloc[0] - 1) * 100
 
@@ -398,8 +425,8 @@ elif page == "Prediction":
                 else:
                     st.markdown('<div style="padding: 10px; color: white; background-color: red; text-align: center;">No</div>', unsafe_allow_html=True)
 
-            else:
-                st.write("Error: Insufficient data for calculating returns.")
+            # Always show the data, but only show the error if you want
+            st.write(stock_data)
 
         except Exception as e:
             st.write(f"Error: {str(e)}")
